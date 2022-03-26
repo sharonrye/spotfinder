@@ -1,5 +1,30 @@
 # SpotFinder
-# M. Schubnell, University of Michigan
+#
+# Centroidig code for analyzing FITS files. Code is derived from various code elemets used during
+# assembly and testing of DESI fiber positioners at UM in 2016-2019.
+#
+# Authors:
+#   M. Schubnell, University of Michigan
+#   J. Silber, LBNL
+#   K. Fanning, University of Michigan
+# 
+# 
+# Application example:
+# 
+# $ python3 
+# > import spotfinder; 
+# > sf = spotfinder.SpotFinder('lbl_petal1.fits',nspots=450) # fits file and the number of expected spots (nspots) is required; 
+#                                                            # this number can be larger than the true number of spots
+# > sf.set_region_file('regions.reg')                        # specify a region file (optional)
+# > sf.set_parameter('fitbox_size', int value)               # specify a box size which should be slightly larger than 
+#                                                            # the spots (optional, defaults to 7)
+# > sf.set_parameter('verbose',bool value)                   # specify verbose mode (True or False, optional, defaults to False)
+# > centroids = sf.get_centroids()
+#
+#
+#
+#
+# --------------------------------------------------------------------------------------------          
 import numpy as np
 import mahotas as mh
 from scipy.ndimage.measurements import center_of_mass
@@ -8,6 +33,13 @@ from numpy import sqrt, exp, ravel, arange
 from scipy import optimize
 from pylab import indices
 from astropy.io import fits
+
+# Version history
+# 0.1  mar 25 2022  ms   created spotfinder class and collected various files used during 
+#                        UM xytest into a single file
+# 0.2  mar 26 2022  ms   minor bug fixes; added comments
+#
+VERSION = 0.2
 
 def gauss(x, *p):
     A, mu, sigma = p
@@ -207,13 +239,6 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
         #    should_save_sample_image = True
         if FWHMSub[-1] < 0.5:
             print('fwhm = ' + str(FWHMSub[-1]) + ' appears invalid, check if fitbox size (' + str(size_fitbox) + ') is appropriate and dots are sufficiently illuminated')
-        #    should_save_sample_image = True
-        #if should_save_sample_image:
-        #    if len(os.listdir()) < max_sample_files_to_save:
-        #        savefile = save_dir + 'peak_' + format(peak,'.1f') + '_fwhm_' + format(FWHMSub[-1],'.3f') + '_sizefitbox_' + str(size_fitbox) + '.FITS'
-        #        sample = pyfits.PrimaryHDU(img)
-        #        sample.writeto(savefile)
-        #        print('wrote a sample image file to ' + savefile)
 
     return xCenSub, yCenSub, peaks, FWHMSub
 def magnitude(p,b):
@@ -221,7 +246,7 @@ def magnitude(p,b):
     return m
 
 class SpotFinder():
-    def __init__(self, fits_file, nspots = 1, print_summary = False, verbose=False):
+    def __init__(self, fits_file=None, nspots = 1, print_summary = False, verbose=False):
         self.version = 0.1
         self.verbose = False
         self.nspots = nspots
@@ -230,26 +255,44 @@ class SpotFinder():
         self.fboxsize = 7
         self.fits_name = fits_file
         self.region_file = None
-        fits_file = fits.open(fits_file)
-        self.img=fits_file[0].data
+        self.img = None
+        if fits_file:
+            fits_file = fits.open(fits_file)
+            self.img=fits_file[0].data
         
     def set_parameter(self, parameter, value):
-        parameter = str(parameter).lower()
-        if parameter not in ['max_counts', 'min_energy', 'fboxsize', 'verbose']:
-            return 'ERROR: not a valid parameter'
-        if parameter in ['max_counts']:
-            self.max_counts = value
-        if parameter in ['min_energy']:
-            self.min_energy = value
-        if parameter in ['fboxsize']:
-            self.fboxsize = value
-        if parameter in ['verbose']:
-            self.verbose = value 
-            
+        try:
+            parameter = str(parameter).lower()
+            if parameter not in ['max_counts', 'min_energy', 'fitbox_size', 'verbose']:
+                return 'ERROR: not a valid parameter'
+            if parameter in ['max_counts']:
+                self.max_counts = value
+            if parameter in ['min_energy']:
+                self.min_energy = value
+            if parameter in ['fitbox_size']:
+                self.fboxsize = int(value)
+            if parameter in ['verbose']:
+                self.verbose = value 
+            return 'SUCCESS'
+        except:
+            return 'FAILED'
+
     def set_region_file(self, region_file='region.reg'):
         self.region_file = region_file
-    
+        return 'SUCCESS'
+
+    def set_fits_file(self, fits_file=None):
+        if not fits_file:
+            return 'FAILED: fits file is required'
+        f = fits.open(fits_file)
+        self.img=f[0].data
+        return 'SUCCESS: new fits file '+str(fits_file)
+
     def get_centroids(self,print_summary = False, region_file=None):
+        if isinstance(self.img,bool):
+            if not self.img:
+                return 'FAILED: fits file required'
+
         self.print_summary = print_summary
         self.region_file = region_file
         try:
@@ -272,30 +315,28 @@ class SpotFinder():
             centroids = {'peaks':peaks_sorted, 'x':x_sorted, 'y': y_sorted, 'fwhm':fwhm_sorted,'energy':energy_sorted}
         except:
             centroids = None
-        if centroids and self.print_summary:
-            print(" File: "+str(self.fits_name))
-            print(" Number of centroids requested: "+str(self.nspots))
-            print(" Fitboxsize: "+str(self.fboxsize))
-            print(" Centroid list:")  
-            print(" Spot  x          y         FWHM    Peak     LD  ")          
-            for i, x in enumerate(x_sorted):
-                    line=("{:5d} {:9.3f} {:9.3f} {:6.2f}  {:7.0f} {:7.2f} ".format(i, x, y_sorted[i], 
-                                            fwhm_sorted[i], peaks_sorted[i], energy_sorted[i]))
-                    if energy[i] < self.min_energy:
-                            line=line+'*'
-                    print(line)
-            print(" Min peak   : {:8.2f} ".format(min(peaks_sorted)))
-            print(" Max peak   : {:8.2f} ".format(max(peaks_sorted)))
-            print(" Mean peak  : {:8.2f} ".format(np.mean(peaks_sorted)))
-            print(" Sigma peak : {:8.2f} ".format(np.std(peaks_sorted)))
-            
-        if centroids and self.region_file:
-            with open(self.region_file,'w') as fp:
+        finally:
+            if self.print_summary:
+                print(" File: "+str(self.fits_name))
+                print(" Number of centroids requested: "+str(self.nspots))
+                print(" Fitboxsize: "+str(self.fboxsize))
+                print(" Centroid list:")  
+                print(" Spot  x          y         FWHM    Peak     LD  ")          
                 for i, x in enumerate(x_sorted):
-                    fp.write('circle '+ "{:9.3f} {:9.3f} {:7.3f} \n".format(x+1, y_sorted[i]+1, fwhm_sorted[i]/2.))
-                    text='"'+str(i)+'"'
-                    fp.write('text '+ "{:9.3f} {:9.3f} {:s} \n".format(x+1+5, y_sorted[i]+1+5, text))
-        return centroids
-
-
+                        line=("{:5d} {:9.3f} {:9.3f} {:6.2f}  {:7.0f} {:7.2f} ".format(i, x, y_sorted[i], 
+                                                fwhm_sorted[i], peaks_sorted[i], energy_sorted[i]))
+                        if energy[i] < self.min_energy:
+                                line=line+'*'
+                        print(line)
+                print(" Min peak   : {:8.2f} ".format(min(peaks_sorted)))
+                print(" Max peak   : {:8.2f} ".format(max(peaks_sorted)))
+                print(" Mean peak  : {:8.2f} ".format(np.mean(peaks_sorted)))
+                print(" Sigma peak : {:8.2f} ".format(np.std(peaks_sorted)))
             
+            if self.region_file:
+                with open(self.region_file,'w') as fp:
+                    for i, x in enumerate(x_sorted):
+                        fp.write('circle '+ "{:9.3f} {:9.3f} {:7.3f} \n".format(x+1, y_sorted[i]+1, fwhm_sorted[i]/2.))
+                        text='"'+str(i)+'"'
+                        fp.write('text '+ "{:9.3f} {:9.3f} {:s} \n".format(x+1+5, y_sorted[i]+1+5, text))
+        return centroids
