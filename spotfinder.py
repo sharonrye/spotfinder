@@ -232,7 +232,6 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
 
         peak = params[1]
         peaks.append(peak)
-
         #should_save_sample_image = False
         if peak < 0 or peak > 2**16-1:
             print('peak = ' + str(peak) + ' brightness appears out of expected range')
@@ -288,13 +287,14 @@ class SpotFinder():
         self.img=f[0].data
         return 'SUCCESS: new fits file '+str(fits_file)
 
-    def get_centroids(self,print_summary = False, region_file=None):
-        if isinstance(self.img,bool):
+    def get_centroids(self,print_summary = False, region_file = None):
+        if isinstance(self.img, bool):
             if not self.img:
                 return 'FAILED: fits file required'
 
         self.print_summary = print_summary
-        self.region_file = region_file
+        if not isinstance(region_file, bool):
+            self.region_file = region_file
         try:
             xCenSub, yCenSub, peaks, FWHMSub = multiCens(self.img, n_centroids_to_keep=self.nspots,
                             verbose=self.verbose, write_fits=False,size_fitbox=self.fboxsize)
@@ -316,6 +316,8 @@ class SpotFinder():
         except:
             centroids = None
         finally:
+            print(self.region_file)
+
             if self.print_summary:
                 print(" File: "+str(self.fits_name))
                 print(" Number of centroids requested: "+str(self.nspots))
@@ -334,6 +336,7 @@ class SpotFinder():
                 print(" Sigma peak : {:8.2f} ".format(np.std(peaks_sorted)))
             
             if self.region_file:
+                print('here')
                 with open(self.region_file,'w') as fp:
                     for i, x in enumerate(x_sorted):
                         fp.write('circle '+ "{:9.3f} {:9.3f} {:7.3f} \n".format(x+1, y_sorted[i]+1, fwhm_sorted[i]/2.))
