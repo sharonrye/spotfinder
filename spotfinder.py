@@ -40,7 +40,7 @@ from astropy.io import fits
 # 0.1  mar 25 2022  ms   created spotfinder class and collected various files used during 
 #                        UM xytest into a single file
 #
-VERSION = 0.2
+VERSION = 0.3
 
 def gauss(x, *p):
     A, mu, sigma = p
