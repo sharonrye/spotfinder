@@ -27,7 +27,7 @@
 # --------------------------------------------------------------------------------------------          
 import numpy as np
 import mahotas as mh
-from scipy.ndimage.measurements import center_of_mass
+from scipy.ndimage import center_of_mass
 import os, sys
 from numpy import sqrt, exp, ravel, arange
 from scipy import optimize
@@ -35,9 +35,10 @@ from pylab import indices
 from astropy.io import fits
 
 # Version history
+# 0.3  aug 06 2024  ms   made code executable; added command line parser
+# 0.2  mar 26 2022  ms   minor bug fixes; added comments
 # 0.1  mar 25 2022  ms   created spotfinder class and collected various files used during 
 #                        UM xytest into a single file
-# 0.2  mar 26 2022  ms   minor bug fixes; added comments
 #
 VERSION = 0.2
 
@@ -195,6 +196,7 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
     labeled, nr_objects = mh.label(bw)
     sizes = mh.labeled.labeled_size(labeled) # size[0] is the background size, sizes[1 and greater] are number of pixels in each region
     sorted_sizes_indexes = np.argsort(sizes)[::-1] # return in descending order
+    print(sorted_sizes_indexes)
     good_spot_indexes = sorted_sizes_indexes[1:n_centroids_to_keep+1] # avoiding the background regions entry at the beginning
 
     # In rare cases of having many bright spots and just a small # of dimmer (but still
@@ -212,6 +214,7 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
     max_sample_files_to_save = 20
 
     centers = center_of_mass(labeled, labels=labeled, index=[good_spot_indexes])
+    print('centers',centers)
     nbox = size_fitbox
     for i,x in enumerate(centers):
         x=x[0]
@@ -236,7 +239,7 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
         if peak < 0 or peak > 2**16-1:
             print('peak = ' + str(peak) + ' brightness appears out of expected range')
         #    should_save_sample_image = True
-        if FWHMSub[-1] < 0.5:
+        if FWHMSub[-1] < 1:
             print('fwhm = ' + str(FWHMSub[-1]) + ' appears invalid, check if fitbox size (' + str(size_fitbox) + ') is appropriate and dots are sufficiently illuminated')
 
     return xCenSub, yCenSub, peaks, FWHMSub
@@ -244,10 +247,25 @@ def magnitude(p,b):
     m=25.0 - 2.5*np.log10(p-b)
     return m
 
+
+# Function to check the distance between two points
+def is_too_close(point1, point2, threshold):
+    return abs(point1[0] - point2[0]) < threshold and abs(point1[1] - point2[1]) < threshold
+
+# Function to filter points
+def filter_points(points, threshold):
+    filtered_points = []
+    for point in points:
+        too_close = any(is_too_close(point, fp, threshold) for fp in filtered_points)
+        if not too_close:
+            filtered_points.append(point)
+    return filtered_points
+
+
 class SpotFinder():
-    def __init__(self, fits_file=None, nspots = 1, print_summary = False, verbose=False):
-        self.version = 0.1
-        self.verbose = False
+    def __init__(self, fits_file=None, nspots = 1, verbose=False):
+        self.version = 0.3
+        self.verbose = verbose
         self.nspots = nspots
         self.max_counts = 2**16 - 1 # SBIC camera ADU max
         self.min_energy = 0.3 * 1.0 # this is the minimum allowed value for the product peak*fwhm for any given dot
@@ -262,6 +280,7 @@ class SpotFinder():
     def set_parameter(self, parameter, value):
         try:
             parameter = str(parameter).lower()
+            print('paramater',paramater)
             if parameter not in ['max_counts', 'min_energy', 'fitbox_size', 'verbose']:
                 return 'ERROR: not a valid parameter'
             if parameter in ['max_counts']:
@@ -276,7 +295,8 @@ class SpotFinder():
         except:
             return 'FAILED'
 
-    def set_region_file(self, region_file='region.reg'):
+    def set_region_file(self, region_file='regions.reg'):
+        print(region_file)
         self.region_file = region_file
         return 'SUCCESS'
 
@@ -287,14 +307,14 @@ class SpotFinder():
         self.img=f[0].data
         return 'SUCCESS: new fits file '+str(fits_file)
 
-    def get_centroids(self,print_summary = False, region_file = None):
+    def get_centroids(self,print_summary = False):
         if isinstance(self.img, bool):
             if not self.img:
                 return 'FAILED: fits file required'
 
         self.print_summary = print_summary
-        if not isinstance(region_file, bool):
-            self.region_file = region_file
+        #if not isinstance(region_file, bool):
+        #    self.region_file = region_file
         try:
             xCenSub, yCenSub, peaks, FWHMSub = multiCens(self.img, n_centroids_to_keep=self.nspots,
                             verbose=self.verbose, write_fits=False,size_fitbox=self.fboxsize)
@@ -305,7 +325,7 @@ class SpotFinder():
             # measured peak is not.
             energy=[FWHMSub[i]*(peaks[i]/self.max_counts) for i in range(len(peaks))]
 
-            sindex=sorted(range(len(peaks)), key=lambda k: peaks[k]) 
+            sindex=sorted(range(len(peaks)), key=lambda k: -peaks[k]) 
             peaks_sorted=[peaks[i] for i in sindex]
             x_sorted=[xCenSub[i] for i in sindex]
             y_sorted=[yCenSub[i] for i in sindex]
@@ -316,7 +336,14 @@ class SpotFinder():
         except:
             centroids = None
         finally:
-            print(self.region_file)
+
+            # filter 
+            points=[]
+            for i, x in enumerate(x_sorted):
+                points.append((x+1,y_sorted[i]+1, fwhm_sorted[i], peaks_sorted[i], energy_sorted[i], i))
+            filtered_points = filter_points(points, self.fboxsize )
+
+
 
             if self.print_summary:
                 print(" File: "+str(self.fits_name))
@@ -324,22 +351,71 @@ class SpotFinder():
                 print(" Fitboxsize: "+str(self.fboxsize))
                 print(" Centroid list:")  
                 print(" Spot  x          y         FWHM    Peak     LD  ")          
-                for i, x in enumerate(x_sorted):
-                        line=("{:5d} {:9.3f} {:9.3f} {:6.2f}  {:7.0f} {:7.2f} ".format(i, x, y_sorted[i], 
-                                                fwhm_sorted[i], peaks_sorted[i], energy_sorted[i]))
-                        if energy[i] < self.min_energy:
-                                line=line+'*'
-                        print(line)
-                print(" Min peak   : {:8.2f} ".format(min(peaks_sorted)))
+                #for i, x in enumerate(x_sorted):
+                #        use = True
+                #        line=("{:5d} {:9.3f} {:9.3f} {:6.2f}  {:7.0f} {:7.2f} ".format(i, x+1, y_sorted[i]+1, 
+                #                                fwhm_sorted[i], peaks_sorted[i], energy_sorted[i]))
+                #        # don't use centroids with energy below threshold
+                #        if energy_sorted[i] < self.min_energy:
+                #                line=line+'*'
+                #        use=
+
+
+                if self.region_file:
+                    with open(self.region_file,'w') as fpointer:
+                        fpointer.write('global color=magenta font="helvetica 13 normal"\n')
+
+                i=0
+                for fp in filtered_points:
+                    if fp[2] > 1.: 
+                        print(f"{i:<5} {fp[0]:<10.3f} {fp[1]:<10.3f} {fp[2]:<5.2f} {fp[3]:<7} {fp[4]:<4.2f}")
+  
+                        if self.region_file:
+                            with open(self.region_file,'a') as fpointer:
+                                fpointer.write('circle '+ "{:9.3f} {:9.3f} {:7.3f} \n".format(fp[0]+1, fp[1]+1, fp[2]/2.))
+                                text='"'+str(i)+'"'
+                                fpointer.write('text '+ "{:9.3f} {:9.3f} {:s} \n".format(fp[0]+6, fp[1]+6, text))
+                        i+=1
+                
+                print("\n Min peak   : {:8.2f} ".format(min(peaks_sorted)))
                 print(" Max peak   : {:8.2f} ".format(max(peaks_sorted)))
                 print(" Mean peak  : {:8.2f} ".format(np.mean(peaks_sorted)))
                 print(" Sigma peak : {:8.2f} ".format(np.std(peaks_sorted)))
-            
-            if self.region_file:
-                print('here')
-                with open(self.region_file,'w') as fp:
-                    for i, x in enumerate(x_sorted):
-                        fp.write('circle '+ "{:9.3f} {:9.3f} {:7.3f} \n".format(x+1, y_sorted[i]+1, fwhm_sorted[i]/2.))
-                        text='"'+str(i)+'"'
-                        fp.write('text '+ "{:9.3f} {:9.3f} {:s} \n".format(x+1+5, y_sorted[i]+1+5, text))
+
+            #if self.region_file:
+            #    with open(self.region_file,'w') as fp:
+            #        fp.write('global color=magenta font="helvetica 13 normal"\n')
+            #        for i, x in enumerate(x_sorted):
+            #            r = fwhm_sorted[i]/2.
+            #            fp.write('circle '+ "{:9.3f} {:9.3f} {:7.3f} \n".format(x+1, y_sorted[i]+1, r))
+            #            text='"'+str(i)+'"'
+            #            fp.write('text '+ "{:9.3f} {:9.3f} {:s} \n".format(x+6, y_sorted[i]+6, text))
         return centroids
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+
+    # Add arguments
+    parser.add_argument('--ncentroids','-n', type=int, nargs='?', default=1, help='Number of centroids expected (default: 1)')
+    parser.add_argument('--fitsfile','-f' ,type=str, nargs='?', required=True, help='FITS filename (default: sbig_image.fits)')
+    parser.add_argument('--fitbox_size','-fs', type=int, nargs='?', default=7, help='Fitbox size (default: 7)')
+
+    # Parse arguments
+    args = parser.parse_args()
+
+
+    # Retrieve values from args
+    nspots = args.ncentroids
+    fname = args.fitsfile
+    fboxsize = args.fitbox_size
+    sf = SpotFinder(fits_file=fname, nspots=nspots, verbose=False)
+    sf.set_region_file('regions.reg') 
+    sf.set_parameter('fitbox_size', fboxsize)  
+
+
+    sf.get_centroids(print_summary = True)
+
+
+
