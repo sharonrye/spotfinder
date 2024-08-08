@@ -1,0 +1,5 @@
+global color=magenta font="helvetica 13 normal"
+circle   500.534   258.538   0.544 
+text   505.534   263.538 "0" 
+circle   370.262   247.239   0.521 
+text   375.262   252.239 "1" 
