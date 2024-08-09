@@ -25,14 +25,15 @@
 #
 #
 # --------------------------------------------------------------------------------------------          
-import numpy as np
+import os
+
 import mahotas as mh
-from scipy.ndimage import center_of_mass
-import os, sys
-from numpy import sqrt, exp, ravel, arange
-from scipy import optimize
-from pylab import indices
+import numpy as np
 from astropy.io import fits
+from numpy import sqrt, exp, ravel, arange
+from pylab import indices
+from scipy import optimize
+from scipy.ndimage import center_of_mass
 
 # Version history
 # 0.3  aug 06 2024  ms   made code executable; added command line parser
@@ -42,7 +43,11 @@ from astropy.io import fits
 #
 VERSION = 0.3
 
+# TODO: why are the centroids off center to the upper right? is it bc a single pixel is too high compared to the
+# surrounding pixels? Could applying a gaussian blur filter first be a solution?
 
+
+# function is never used?
 def gauss(x, *p):
     A, mu, sigma = p
     return A * exp(-(x - mu) ** 2 / (2. * sigma ** 2))
@@ -73,7 +78,7 @@ def moments(data):
 
 
 def fitgaussian(data):
-    """Returns (height, x, y, width_x, width_y)
+    """Returns (bias, height, x, y, width_x, width_y)
     the gaussian parameters of a 2D distribution found by a fit"""
     params = moments(data)
     errorfunction = lambda p: ravel(gaussian(*p)(*indices(data.shape)) - data)
@@ -190,6 +195,7 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
     img = remove_hot_pixels(img, 7)
 
     img = img.astype(np.uint16)
+    # QUESTION: why 0.1? how does adjusting this value affect output?
     level_fraction_of_peak = 0.1
     level_frac = int(level_fraction_of_peak * np.max(np.max(img)))
     if no_otsu:
@@ -205,7 +211,7 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
             os.remove(filename)
         except:
             pass
-        hdu = pyfits.PrimaryHDU(bw)
+        hdu = fits.PrimaryHDU(bw)
         hdu.writeto(filename)
     else:
         filename = []
@@ -242,14 +248,18 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
         data = img[py - nbox:py + nbox, px - nbox:px + nbox]
         params = fitgaussian(data)
         fwhm = abs(2.355 * max(params[4], params[5]))
+        # QUESTION: why threshold of .5?
         if fwhm < .5:
             print(" fit failed - trying again with smaller fitbox")
             sbox = nbox - 1
             data = img[py - sbox:py + sbox, px - sbox:px + sbox]
             params = fitgaussian(data)
             fwhm = abs(2.355 * max(params[4], params[5]))
-        xCenSub.append(float(px) - float(nbox) + params[3])
-        yCenSub.append(float(py) - float(nbox) + params[2])
+        # xCenSub.append(float(px) - float(nbox) + params[3])
+        # yCenSub.append(float(py) - float(nbox) + params[2])
+        # px, py has already been truncated, use original float values from x instead
+        xCenSub.append(x[1] - float(nbox) + params[3])
+        yCenSub.append(x[0] - float(nbox) + params[2])
         FWHMSub.append(fwhm)
 
         peak = params[1]
@@ -258,6 +268,7 @@ def multiCens(img, n_centroids_to_keep=2, verbose=False, write_fits=True, no_ots
         if peak < 0 or peak > 2 ** 16 - 1:
             print('peak = ' + str(peak) + ' brightness appears out of expected range')
         #    should_save_sample_image = True
+        # QUESTION: why threshold of 1?
         if FWHMSub[-1] < 1:
             print('fwhm = ' + str(FWHMSub[-1]) + ' appears invalid, check if fitbox size (' + str(
                 size_fitbox) + ') is appropriate and dots are sufficiently illuminated')
@@ -280,6 +291,7 @@ def filter_points(points, threshold):
     filtered_points = []
     for point in points:
         too_close = any(is_too_close(point, fp, threshold) for fp in filtered_points)
+        # TODO: if too_close, try with smaller fitbox
         if not too_close:
             filtered_points.append(point)
     return filtered_points
@@ -340,7 +352,7 @@ class SpotFinder():
         #    self.region_file = region_file
         try:
             xCenSub, yCenSub, peaks, FWHMSub = multiCens(self.img, n_centroids_to_keep=self.nspots,
-                                                         verbose=self.verbose, write_fits=False,
+                                                         verbose=self.verbose, write_fits=False, no_otsu=True,
                                                          size_fitbox=self.fboxsize)
             # we are calculating the quantity 'FWHM*peak' with peak normalized to the maximum peak level. 
             # This is esentially a linear light density. We will call this quantity 'energy' to match 
@@ -373,7 +385,7 @@ class SpotFinder():
                 print(" Number of centroids requested: " + str(self.nspots))
                 print(" Fitboxsize: " + str(self.fboxsize))
                 print(" Centroid list:")
-                print(" Spot  x          y         FWHM    Peak     LD  ")
+                print(" Spot  x          y         FWHM    Peak         LD  ")
                 # for i, x in enumerate(x_sorted):
                 #        use = True
                 #        line=("{:5d} {:9.3f} {:9.3f} {:6.2f}  {:7.0f} {:7.2f} ".format(i, x+1, y_sorted[i]+1, 
@@ -389,7 +401,9 @@ class SpotFinder():
 
                 i = 0
                 for fp in filtered_points:
-                    if fp[2] > 1.:
+                    # QUESTION: why fwhm threshold of 1?
+                    # if fp[2] > 1.:
+                    if True:
                         print(f"{i:<5} {fp[0]:<10.3f} {fp[1]:<10.3f} {fp[2]:<5.2f} {fp[3]:<7} {fp[4]:<4.2f}")
 
                         if self.region_file:
